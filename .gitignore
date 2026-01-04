@@ -1,0 +1,6 @@
+**/__pycache__
+.DS_Store
+**/pupperv3_mjx.egg-info/**
+wandb
+artifacts
+checkpoint
