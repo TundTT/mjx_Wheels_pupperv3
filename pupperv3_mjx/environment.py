@@ -166,11 +166,23 @@ class PupperV3Env(PipelineEnv):
         self._dt = environment_timestep  # this environment is 50 fps
         sys = sys.tree_replace({"opt.timestep": physics_timestep})
 
-        # override menagerie params for smoother policy
+        # override menagerie params for smoother policy - ONLY for leg actuators
+        # Wheel actuators (indices 2, 5, 8, 11) keep their velocity control from XML
+        leg_actuator_indices = [0, 1, 3, 4, 6, 7, 9, 10]
+
+        # Start with existing parameters
+        new_gainprm = sys.actuator_gainprm
+        new_biasprm = sys.actuator_biasprm
+
+        # Apply position control only to leg actuators
+        for idx in leg_actuator_indices:
+            new_gainprm = new_gainprm.at[idx, 0].set(position_control_kp)
+            new_biasprm = new_biasprm.at[idx, 1].set(-position_control_kp)
+            new_biasprm = new_biasprm.at[idx, 2].set(-dof_damping)
+
         sys = sys.replace(
-            # dof_damping=sys.dof_damping.at[6:].set(DOF_DAMPING),
-            actuator_gainprm=sys.actuator_gainprm.at[:, 0].set(position_control_kp),
-            actuator_biasprm=sys.actuator_biasprm.at[:, 1].set(-position_control_kp).at[:, 2].set(-dof_damping),
+            actuator_gainprm=new_gainprm,
+            actuator_biasprm=new_biasprm,
         )
 
         # override the default joint angles with default_pose
