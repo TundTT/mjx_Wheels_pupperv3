@@ -534,12 +534,28 @@ class PupperV3Env(PipelineEnv):
             self._imu_latency_distribution,
         )
 
+        # Construct Hybrid Observation:
+        # Legs: Position (q)
+        # Wheels: Velocity (qd)
+        # This prevents clipping issues with continuous rotation and feeds relevant control data
+        
+        joint_pos = pipeline_state.q[7:] - self._default_pose
+        joint_vel = pipeline_state.qd[6:]
+        
+        # Start with position data + noise
+        motor_obs = joint_pos + motor_ang_noise
+        
+        # Overwrite wheel indices (2, 5, 8, 11) with velocity data + noise
+        # Note: We reuse motor_ang_noise for simplicity, but conceptually it is velocity noise here
+        wheel_indices = jp.array([2, 5, 8, 11])
+        motor_obs = motor_obs.at[wheel_indices].set(joint_vel[wheel_indices] + motor_ang_noise[wheel_indices])
+
         # Construct observation and add noise
         obs = jp.concatenate([
             lagged_imu_data,  # noised angular velocity and gravity
             state_info["command"],  # command
             state_info["desired_world_z_in_body_frame"],  # desired body orientation
-            pipeline_state.q[7:] - self._default_pose + motor_ang_noise,  # motor angles
+            motor_obs,  # motor angles (legs) and velocities (wheels)
             state_info["last_act"] + last_action_noise,  # last action
         ])
 
