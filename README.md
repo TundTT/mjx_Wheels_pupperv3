@@ -11,7 +11,7 @@ This repository provides a high-performance, GPU-accelerated simulation environm
 -   **Sim-to-Real Ready**: Includes domain randomization and actuator modeling to bridge the reality gap.
 -   **Hybrid Control Scheme**: Custom physics implementation to support both position-controlled joints and velocity-controlled wheels.
 
-## Key Contributions: Legged-to-Wheeled Conversion
+## Key Contributions: Legged-to-Wheeled Conversion 🛞
 
 This repository represents a significant evolution from the standard legged Pupper environment. The following core modifications were implemented to support the wheeled architecture:
 
