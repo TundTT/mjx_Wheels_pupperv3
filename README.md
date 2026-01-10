@@ -1,97 +1,94 @@
-# pupperv3_mjx
+# Wheeled Pupper v3 Core – JAX/MJX RL Environment
 
-A JAX/MuJoCo-based Reinforcement Learning environment for the **Pupper V3 Quadruped Robot (Wheeled Variant)**.
+**The high-performance reinforcement learning "Brain" for the hybrid Wheeled Pupper v3 robot.**
 
-This repository provides a high-performance, GPU-accelerated simulation environment powered by [Brax](https://github.com/google/brax) and [MuJoCo MJX](https://github.com/google-deepmind/mujoco). It is specifically engineered to handle the unique dynamics of a wheeled-legged robot, combining the versatility of legged locomotion with the efficiency of wheeled travel.
+This repository contains the core logic for training the Wheeled Pupper using **MuJoCo MJX** (simulated on GPU) and **JAX**. It features a custom PPO implementation designed to solve the hybrid control problem of combining legged articulation with wheeled locomotion.
 
-## Features
+## Key Technical Features
 
--   **Fully Differentiable**: Built on JAX for massive parallelization and gradient-based optimization.
--   **GPU Augmented**: Capable of simulating thousands of environments per second on a single GPU.
--   **Sim-to-Real Ready**: Includes domain randomization and actuator modeling to bridge the reality gap.
--   **Hybrid Control Scheme**: Custom physics implementation to support both position-controlled joints and velocity-controlled wheels.
+### 1. Hybrid Control Architecture (JAX)
+Unlike standard quadruped environments, this project implements a **Split Control** scheme. We decoupled the legged joints (position control) from the wheel actuators (velocity control) directly in the physics step logic.
 
-## Key Contributions: Legged-to-Wheeled Conversion 🛞
+*   **Legs**: High-stiffness PD control for posture maintenance.
+*   **Wheels**: Direct velocity command for smooth rolling.
 
-This repository represents a significant evolution from the standard legged Pupper environment. The following core modifications were implemented to support the wheeled architecture:
+### 2. Custom Reward Engineering
+Achieving stable 0.75 m/s velocity tracking required designing a multi-objective reward function that balances tracking performance with energy efficiency.
 
-### 1. Hybrid Control Architecture
-Standard legged robots typically use position control (PD) for all joints. For the wheeled variant, we implemented a **Split Control, Split Actuation** logic:
--   **Leg Joints (Hips/Knees)**: Maintain accurate Position Control to hold posture and manage terrain adaptation. High stiffness (`kp=5.0`) and damping (`kd=0.25`) are applied.
--   **Wheel Joints**: Converted to pure Velocity Control. This allows for continuous, unrestricted rolling without fighting against position setpoints.
--   **Implementation**: Custom logic in `PupperV3Env` overrides standard Menagerie parameters, selectively applying gain/bias settings only to specific actuator indices (`leg_actuator_indices`), leaving wheel actuators free-spinning and velocity-driven.
+```python
+# pupperv3_mjx/config.py
+rewards=config_dict.ConfigDict(
+    dict(
+        # Primary Objective: Stable Velocity Tracking
+        tracking_lin_vel=1.5,
+        tracking_ang_vel=0.8,
+        
+        # Energy Efficiency & Hardware Safety
+        torques=-0.0002,           # Minimize motor heat overhead
+        mechanical_work=-0.00,     # Minimize Cost of Transport (CoT)
+        action_rate=-0.01,         # Prevent high-frequency jitter (smooth control)
+        
+        # Shaping for Stability
+        foot_slip=-0.1,            # Critical for traction loss in wheeled mode
+        orientation=-5.0,          # Penalize pitch/roll instability
+    )
+)
+```
 
-### 2. Continuous Rotation & Infinite Horizon
--   **Zero-Windup Observation**: Standard joint sensors wrap or limit at $\pi$ radians. We modified the observation space to track **Wheel Velocity** instead of **Wheel Position**. This ensures the policy sees a consistent state even after the wheels have rotated millions of degrees.
--   **Limit Removal**: Removed joint limits for wheel actuators in the physics engine to enable true continuous rotation.
+### 3. Sim-to-Real: Domain Randomization
+To ensure the policy transfers to physical hardware, the environment implements aggressive domain randomization using JAX's `vmap` to simulate thousands of varied physics parameters in parallel.
 
-### 3. Hybrid Observation Space
-The policy input was redesigned to accommodate the dual nature of the robot:
--   **Inputs**: `[IMU Data, Commands, Desired Orientation, Motor State, Last Action]`
--   **Motor State**: A hybrid vector containing:
-    -   *Legs*: Joint Angles (Position) relative to default pose.
-    -   *Wheels*: Joint Velocities (rad/s).
+```python
+# pupperv3_mjx/domain_randomization.py
+@jax.vmap
+def rand(rng):
+    # Randomize friction coefficients (0.6 to 1.4) to handle different floor types
+    friction = jax.random.uniform(key, (1,), minval=0.6, maxval=1.4)
     
-This allows the RL agent to learn stable standing/walking behaviors via the legs while simultaneously learning smooth driving behaviors via the wheels.
+    # 50% Randomization of Actuator Gains (Kp/Kd) to model motor wear/variance
+    kp = jax.random.uniform(key_kp, (1,), minval=0.75, maxval=1.25) * sys.actuator_gainprm[:, 0]
+    
+    # Randomize Center of Mass (CoM) to account for battery/electronics placement
+    body_com_shift = jax.random.uniform(key_com, (3,), minval=-0.03, maxval=0.03)
+    
+    return friction, gain, bias, body_com, ...
+```
 
-## Installation
+## Architecture Overview
 
-### Prerequisites
--   Python 3.10+
--   CUDA-enabled GPU (recommended for training)
+*   **`environment.py`**: The `PupperV3Env` class inherits from `PipelineEnv`. It helps manage the MJX physics state, computes observations, and steps the simulation.
+*   **`rewards.py`**: JIT-compiled reward functions calculated on the GPU for maximum throughput.
+*   **`domain_randomization.py`**: Handles parameter sampling for robust policy training.
 
-### Setup
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/your-username/pupperv3_mjx.git
-    cd pupperv3_mjx
-    ```
+## Installation & Usage
 
-2.  Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-    *Note: Ensure you have the correct JAX version installed for your CUDA version.*
+This package is designed to be installed as a dependency for the [Training Colab](https://github.com/TundTT/colab_Wheel_pupperv3).
 
-3.  Install the package in editable mode:
-    ```bash
-    pip install -e .
-    ```
+```bash
+# Install with MJX support
+pip install -e .
+```
 
-## Usage
-
-### Instantiating the Environment
-The environment can be loaded directly using the `PupperV3Env` class.
+To run the environment loop:
 
 ```python
 import jax
-from pupperv3_mjx import environment
-from pupperv3_mjx import config
+from pupperv3_mjx import environment, config
 
-# Load default reward configuration
-env_config = config.get_config()
-
-# Initialize the environment
+# Initialize the 8192 parallel environments on GPU
 env = environment.PupperV3Env(
-    path="path/to/your/Wheel_pupper.xml", # Ensure you point to your local MJCF
-    reward_config=env_config,
-    action_scale=0.5,
-    observation_history=15
+    path="path/to/Wheel_pupper.xml",
+    reward_config=config.get_config(),
 )
 
-# Reset the environment
-rng = jax.random.PRNGKey(0)
+# Step function compiles to XLA for microsecond latency
 state = env.reset(rng)
-
-# Step the environment
-action = jax.random.uniform(rng, (12,)) # Random action
 next_state = env.step(state, action)
 ```
 
-## Code Structure
+## Acknowledgments
+*   **Google DeepMind**: For the MuJoCo MJX physics engine.
+*   **UW–Madison LeggedAI Lab**: Research support and hardware validation.
 
--   `pupperv3_mjx/environment.py`: **Core Logic**. Contains the `PupperV3Env` class, physics steps, reward calculation, and the custom hybrid control implementation.
--   `pupperv3_mjx/rewards.py`: JIT-compiled reward functions for RL training (tracking, stability, energy efficiency).
--   `pupperv3_mjx/config.py`: Configuration dictionaries for rewards and environment parameters.
--   `pupperv3_mjx/domain_randomization.py`: Tools for randomizing mass, friction, and startup capabilities to improve policy robustness.
--   `meshes/`: Contains STL files for the robot visual and collision geometry.
+---
+**Author**: [Tund Theerawit](https://www.linkedin.com/in/tund-theerawit) | [GitHub](https://github.com/TundTT)
