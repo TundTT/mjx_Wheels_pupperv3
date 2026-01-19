@@ -41,30 +41,30 @@ class PupperV3Env(PipelineEnv):
         joint_lower_limits: List = [
             -1.220,
             -0.420,
-            -9999999,
+            -2.790,
             -2.510,
             -3.140,
-            -9999999,
+            -0.710,
             -1.220,
             -0.420,
-            -9999999,
+            -2.790,
             -2.510,
             -3.140,
-            -9999999,
+            -0.710,
         ],
         joint_upper_limits: List = [
             2.510,
             3.140,
-            9999999,
+            0.710,
             1.220,
             0.420,
-            9999999,
+            2.790,
             2.510,
             3.140,
-            9999999,
+            0.710,
             1.220,
             0.420,
-            9999999,
+            2.790,
         ],
         dof_damping: float = 0.25,
         position_control_kp: float = 5.0,
@@ -166,23 +166,11 @@ class PupperV3Env(PipelineEnv):
         self._dt = environment_timestep  # this environment is 50 fps
         sys = sys.tree_replace({"opt.timestep": physics_timestep})
 
-        # override menagerie params for smoother policy - ONLY for leg actuators
-        # Wheel actuators (indices 2, 5, 8, 11) keep their velocity control from XML
-        leg_actuator_indices = [0, 1, 3, 4, 6, 7, 9, 10]
-
-        # Start with existing parameters
-        new_gainprm = sys.actuator_gainprm
-        new_biasprm = sys.actuator_biasprm
-
-        # Apply position control only to leg actuators
-        for idx in leg_actuator_indices:
-            new_gainprm = new_gainprm.at[idx, 0].set(position_control_kp)
-            new_biasprm = new_biasprm.at[idx, 1].set(-position_control_kp)
-            new_biasprm = new_biasprm.at[idx, 2].set(-dof_damping)
-
+        # override menagerie params for smoother policy
         sys = sys.replace(
-            actuator_gainprm=new_gainprm,
-            actuator_biasprm=new_biasprm,
+            # dof_damping=sys.dof_damping.at[6:].set(DOF_DAMPING),
+            actuator_gainprm=sys.actuator_gainprm.at[:, 0].set(position_control_kp),
+            actuator_biasprm=sys.actuator_biasprm.at[:, 1].set(-position_control_kp).at[:, 2].set(-dof_damping),
         )
 
         # override the default joint angles with default_pose
@@ -534,28 +522,12 @@ class PupperV3Env(PipelineEnv):
             self._imu_latency_distribution,
         )
 
-        # Construct Hybrid Observation:
-        # Legs: Position (q)
-        # Wheels: Velocity (qd)
-        # This prevents clipping issues with continuous rotation and feeds relevant control data
-        
-        joint_pos = pipeline_state.q[7:] - self._default_pose
-        joint_vel = pipeline_state.qd[6:]
-        
-        # Start with position data + noise
-        motor_obs = joint_pos + motor_ang_noise
-        
-        # Overwrite wheel indices (2, 5, 8, 11) with velocity data + noise
-        # Note: We reuse motor_ang_noise for simplicity, but conceptually it is velocity noise here
-        wheel_indices = jp.array([2, 5, 8, 11])
-        motor_obs = motor_obs.at[wheel_indices].set(joint_vel[wheel_indices] + motor_ang_noise[wheel_indices])
-
         # Construct observation and add noise
         obs = jp.concatenate([
             lagged_imu_data,  # noised angular velocity and gravity
             state_info["command"],  # command
             state_info["desired_world_z_in_body_frame"],  # desired body orientation
-            motor_obs,  # motor angles (legs) and velocities (wheels)
+            pipeline_state.q[7:] - self._default_pose + motor_ang_noise,  # motor angles
             state_info["last_act"] + last_action_noise,  # last action
         ])
 
